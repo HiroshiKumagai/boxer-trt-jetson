@@ -147,13 +147,6 @@ boxer-trt-x86_64/
 
 ---
 
-## Jetson Migration
-
-To run on Jetson (aarch64), the Python scripts require no changes.
-Rebuild the Docker images using JetPack-based images (e.g. `dustynv/pytorch`) and re-run `build_engine.sh` on the Jetson device to generate aarch64-compatible TRT engines.
-
----
-
 ## License
 
 MIT License. See [LICENSE](LICENSE).
