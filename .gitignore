@@ -1,0 +1,44 @@
+# Boxer リポジトリ (別途 git clone が必要)
+boxer/
+
+# モデルチェックポイント (大容量)
+ckpts/
+
+# ONNX モデル (大容量)
+onnx_weights/
+
+# TensorRT エンジン (プラットフォーム固有・大容量)
+*.plan
+trt_engines/
+
+# サンプルデータ (大容量)
+sample_data/
+
+# 推論結果
+output/
+
+# 旧マウントディレクトリ
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+
+# 仮想環境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
