@@ -131,9 +131,11 @@ def export_dinov3(device, onnx_dir, hw=960):
             onnx_path,
             input_names=["img"],
             output_names=["features"],
+            # height/width は常に 960x960 固定。動的にすると symbolic shape が
+            # rope_embed 内の If ノードを生成し TensorRT がパースできないため固定する。
             dynamic_axes={
-                "img": {0: "batch", 2: "height", 3: "width"},
-                "features": {0: "batch", 2: "feat_height", 3: "feat_width"},
+                "img": {0: "batch"},
+                "features": {0: "batch"},
             },
             opset_version=18,
             dynamo=False,

@@ -8,8 +8,9 @@
 #   bash build_engine.sh --dino   # DinoV3 only
 #   bash build_engine.sh --boxernet # BoxerNetCore only
 #
-# Note: TRT engines are platform-specific.
-#       Rebuild on each target platform (x86_64 / aarch64 Jetson).
+# Note: TRT engines are platform-specific (aarch64).
+#       x86_64 で書き出した .onnx をそのまま使えるが、
+#       .plan エンジンは必ず Jetson 上で再ビルドすること。
 
 set -e
 
@@ -22,5 +23,5 @@ docker run --rm \
   -v "$PWD"/trt_engines:/workspace/trt_engines \
   -v "$PWD"/python:/workspace/python \
   -w /workspace \
-  boxer-convert-x86_64 \
-  python /workspace/python/build_engines.py ${ARGS}
+  boxer-convert-jetson \
+  python3 /workspace/python/build_engines.py ${ARGS}

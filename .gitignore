@@ -17,6 +17,9 @@ sample_data/
 # 推論結果
 output/
 
+# TRT エンジンキャッシュ (ORT TensorrtExecutionProvider が自動生成)
+trt_cache/
+
 # 旧マウントディレクトリ
 data/
 

@@ -1,0 +1,27 @@
+# Model conversion container (aarch64 / Jetson)
+# Base includes: PyTorch 2.7, TensorRT 10.3, CUDA 12.x (JetPack 6.x / L4T R36.4.0)
+# Responsibilities:
+#   1. Export Boxer models to ONNX (python/onnx_export.py)
+#   2. Build TensorRT .plan engines (python/build_engines.py)
+FROM dustynv/pytorch:2.7-r36.4.0
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1 \
+    libgl1-mesa-glx libgles2-mesa \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --upgrade pip --index-url https://pypi.org/simple && \
+    python3 -m pip install --no-cache-dir \
+        "numpy<2" opencv-python tqdm dill \
+        onnx onnxsim onnxruntime onnxscript \
+        --index-url https://pypi.org/simple
+
+# オプション依存 (Project Aria データローダー)
+RUN python3 -m pip install --no-cache-dir projectaria-tools \
+        --index-url https://pypi.org/simple || true
+
+WORKDIR /workspace/boxer
+CMD ["/bin/bash"]

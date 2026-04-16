@@ -102,6 +102,7 @@ class OwlWrapperONNX:
                 "Please run onnx_export.py --owl first."
             )
 
+        # OWLv2 の Conv ノードは TensorrtExecutionProvider 非対応のため CUDA のみ使用
         providers = (
             ["CUDAExecutionProvider", "CPUExecutionProvider"]
             if device == "cuda"
@@ -241,8 +242,15 @@ class BoxerNetONNX:
         # Load original PyTorch model for geometry processing and head
         model = cls._orig_load_from_checkpoint(ckpt_path, device=device)
 
-        providers = (
+        cuda_providers = (
             ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if device == "cuda"
+            else ["CPUExecutionProvider"]
+        )
+        # DinoV3 は固定形状 (1,3,960,960) → TensorrtExecutionProvider で高速化
+        # BoxerNetCore は動的 M 次元のため TRT 非対応 → CUDA のまま
+        trt_providers = (
+            ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
             if device == "cuda"
             else ["CPUExecutionProvider"]
         )
@@ -264,8 +272,24 @@ class BoxerNetONNX:
         obj._original_model = model
         obj._device = device
 
-        obj._dino_session = ort.InferenceSession(dino_path, sess_opts, providers=providers)
-        obj._core_session = ort.InferenceSession(core_path, sess_opts, providers=providers)
+        # DinoV3: TensorrtExecutionProvider (fixed shape 1×3×960×960, cache reused across runs)
+        # Set trt_fp16_enable=True for ~14% faster inference at ~7% fewer 3D detections.
+        # Set trt_fp16_enable=False (or remove the key) for full FP32 accuracy.
+        trt_cache = os.environ.get('ORT_TENSORRT_CACHE_PATH', '/workspace/trt_cache')
+        dino_trt_providers = (
+            [('TensorrtExecutionProvider', {
+                'trt_fp16_enable': False,   # set True for FP16 (faster, slightly less accurate)
+                'trt_engine_cache_enable': True,
+                'trt_engine_cache_path': trt_cache,
+            }), 'CUDAExecutionProvider', 'CPUExecutionProvider']
+            if device == "cuda"
+            else ["CPUExecutionProvider"]
+        )
+        # BoxerNetCore: CUDAExecutionProvider only.
+        # The M dimension (number of 2D detections) is dynamic and changes every frame,
+        # which causes TensorrtExecutionProvider to recompile the engine per unique M value (~27 s each).
+        obj._dino_session = ort.InferenceSession(dino_path, sess_opts, providers=dino_trt_providers)
+        obj._core_session = ort.InferenceSession(core_path, sess_opts, providers=cuda_providers)
 
         print(f"Loaded BoxerNetONNX on {device} (DinoV3 + Core replaced with ONNX Runtime)")
         return obj

@@ -151,7 +151,7 @@ class OwlWrapperTRT:
             )
 
         # Load TRT engine
-        engine_path = os.path.join(engine_dir, "owlv2_fp16.plan")
+        engine_path = os.path.join(engine_dir, "owlv2_fp32.plan")
         if not os.path.exists(engine_path):
             raise FileNotFoundError(
                 f"TRT engine not found: {engine_path}\n"
@@ -281,8 +281,8 @@ class BoxerNetTRT:
         # Load original PyTorch model for geometry processing and head
         model = cls._orig_load_from_checkpoint(ckpt_path, device=device)
 
-        dino_path = os.path.join(engine_dir, "dinov3_fp16.plan")
-        core_path = os.path.join(engine_dir, "boxernet_core_fp16.plan")
+        dino_path = os.path.join(engine_dir, "dinov3_fp32.plan")
+        core_path = os.path.join(engine_dir, "boxernet_core_fp32.plan")
 
         for path in [dino_path, core_path]:
             if not os.path.exists(path):
