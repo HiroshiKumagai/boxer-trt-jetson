@@ -44,6 +44,14 @@ if [ "${MODE}" = "onnx" ]; then
     -v "$PWD"/python:/workspace/python \
     -e ORT_TENSORRT_ENGINE_CACHE_ENABLE=1 \
     -e ORT_TENSORRT_CACHE_PATH=/workspace/trt_cache \
+    -e BOXER_DISABLE_OPTIMIZED_CACHE \
+    -e BOXER_DISABLE_PERSISTENT_BUF \
+    -e BOXER_VIZ_ASYNC \
+    -e BOXER_CUDA_MEM_LIMIT_GB \
+    -e BOXER_TRT_WORKSPACE_MB \
+    -e BOXER_CORE_ARENA_STRICT \
+    -e BOXER_MEM_PROFILE \
+    -e BOXER_DINO_FP16 \
     -w /workspace/boxer \
     boxer-infer-jetson \
     python3 /workspace/python/run_boxer_onnx.py ${INFER_ARGS}
@@ -79,10 +87,12 @@ sleep 0.3
 # GPU util: GR3D_FREQ field (%, possibly with @freq suffix)
 # GPU RAM: not directly in tegrastats; EMC/RAM are system, but we can use RAM as proxy.
 
-GPU_UTIL_MAX=$(grep -oP 'GR3D_FREQ \K[0-9]+' "${TSTAT_LOG}" 2>/dev/null | sort -n | tail -1 || echo "N/A")
-GPU_UTIL_AVG=$(grep -oP 'GR3D_FREQ \K[0-9]+' "${TSTAT_LOG}" 2>/dev/null | awk '{s+=$1;n++} END{if(n>0) printf "%.0f",s/n; else print "N/A"}' || echo "N/A")
-RAM_MAX=$(grep -oP 'RAM \K[0-9]+(?=/)' "${TSTAT_LOG}" 2>/dev/null | sort -n | tail -1 || echo "N/A")
-RAM_TOTAL=$(grep -oP 'RAM [0-9]+/\K[0-9]+' "${TSTAT_LOG}" 2>/dev/null | head -1 || echo "N/A")
+# Portable across GNU grep / ugrep: use awk for tag-based field extraction.
+GPU_UTIL_MAX=$(awk '{for(i=1;i<=NF;i++) if($i=="GR3D_FREQ"){gsub("%","",$(i+1)); split($(i+1),a,"@"); print a[1]}}' "${TSTAT_LOG}" 2>/dev/null | sort -n | tail -1 || echo "N/A")
+GPU_UTIL_AVG=$(awk '{for(i=1;i<=NF;i++) if($i=="GR3D_FREQ"){gsub("%","",$(i+1)); split($(i+1),a,"@"); print a[1]}}' "${TSTAT_LOG}" 2>/dev/null | awk '{s+=$1;n++} END{if(n>0) printf "%.0f",s/n; else print "N/A"}' || echo "N/A")
+# RAM field is like "RAM 3000/7672MB"
+RAM_MAX=$(awk '{for(i=1;i<=NF;i++) if($i=="RAM"){split($(i+1),a,"/"); print a[1]}}' "${TSTAT_LOG}" 2>/dev/null | sort -n | tail -1 || echo "N/A")
+RAM_TOTAL=$(awk '{for(i=1;i<=NF;i++) if($i=="RAM"){split($(i+1),a,"/"); sub("MB","",a[2]); print a[2]; exit}}' "${TSTAT_LOG}" 2>/dev/null || echo "N/A")
 
 # ---- Report ----
 {
