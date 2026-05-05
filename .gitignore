@@ -1,27 +1,13 @@
-# Boxer リポジトリ (別途 git clone が必要)
+# Upstream Boxer repository (clone separately, see README)
 boxer/
 
-# モデルチェックポイント (大容量)
-ckpts/
-
-# ONNX モデル (大容量)
+# Generated / runtime artifacts (large, platform-specific, regenerated on demand)
 onnx_weights/
-
-# TensorRT エンジン (プラットフォーム固有・大容量)
-*.plan
-trt_engines/
-
-# サンプルデータ (大容量)
-sample_data/
-
-# 推論結果
-output/
-
-# TRT エンジンキャッシュ (ORT TensorrtExecutionProvider が自動生成)
 trt_cache/
+*.plan
 
-# 旧マウントディレクトリ
-data/
+# Inference output
+output/
 
 # Python
 __pycache__/
@@ -32,7 +18,7 @@ dist/
 build/
 .pytest_cache/
 
-# 仮想環境
+# Virtual environments
 venv/
 .venv/
 env/

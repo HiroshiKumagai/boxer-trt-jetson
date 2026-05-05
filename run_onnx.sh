@@ -2,7 +2,7 @@
 # Run Boxer inference with ONNX Runtime.
 #
 # Usage:
-#   bash run_onnx.sh --input sample_data/hohen_gen1 --track
+#   bash run_onnx.sh --input input
 
 set -e
 
@@ -10,7 +10,7 @@ docker run --rm \
   --gpus all \
   --runtime=nvidia \
   -v "$PWD"/boxer:/workspace/boxer \
-  -v "$PWD"/sample_data:/workspace/boxer/sample_data \
+  -v "$PWD"/input:/workspace/boxer/input \
   -v "$PWD"/boxer/ckpts:/workspace/boxer/ckpts \
   -v "$PWD"/output:/workspace/boxer/output \
   -v "$PWD"/onnx_weights:/workspace/onnx_weights \

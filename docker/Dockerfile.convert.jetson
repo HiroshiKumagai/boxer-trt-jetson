@@ -2,26 +2,39 @@
 # Base includes: PyTorch 2.7, TensorRT 10.3, CUDA 12.x (JetPack 6.x / L4T R36.4.0)
 # Responsibilities:
 #   1. Export Boxer models to ONNX (python/onnx_export.py)
-#   2. Build TensorRT .plan engines (python/build_engines.py)
+#   2. Post-process DinoV3 ONNX (python/fix_dinov3_onnx.py)
+#
+# Inference (run_boxer_onnx.py) lives in Dockerfile.infer.jetson;
+# do not add ORT-GPU here.
 FROM dustynv/pytorch:2.7-r36.4.0
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# Headless OpenCV runtime only:
+#   libgl1       — cv2 OpenGL stub
+#   libglib2.0-0 — gi/gobject linkage
+#   libgomp1     — OpenMP runtime used by some cv2 ops
+# Removed (vs previous recipe): libsm6, libxext6, libxrender-dev,
+# libgl1-mesa-glx, libgles2-mesa — only required for cv2.imshow / hardware GL,
+# neither of which the export pipeline uses.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1 \
-    libgl1-mesa-glx libgles2-mesa \
+        libgl1 libglib2.0-0 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Python deps:
+#   numpy<2       — PyTorch 2.7 was built against NumPy 1.x ABI
+#   opencv-python — Boxer codebase imports cv2 at model-load time
+#   onnx          — used by fix_dinov3_onnx.py (graph manipulation)
+#   onnxscript    — required by torch.onnx.export for newer opsets
+#   onnxsim       — onnx_export.py simplifies the graph after export
+#   onnxruntime   — required at runtime by onnxsim's symbolic shape inference
+#                   (CPU build is enough; this image is for export, not inference)
 RUN python3 -m pip install --upgrade pip --index-url https://pypi.org/simple && \
     python3 -m pip install --no-cache-dir \
-        "numpy<2" opencv-python tqdm dill \
-        onnx onnxsim onnxruntime onnxscript \
+        "numpy<2" opencv-python \
+        onnx onnxscript onnxsim onnxruntime \
         --index-url https://pypi.org/simple
-
-# オプション依存 (Project Aria データローダー)
-RUN python3 -m pip install --no-cache-dir projectaria-tools \
-        --index-url https://pypi.org/simple || true
 
 WORKDIR /workspace/boxer
 CMD ["/bin/bash"]

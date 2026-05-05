@@ -1,0 +1,14 @@
+{
+  "camera": {
+    "width": 1408,
+    "height": 1408,
+    "type": "pinhole",
+    "fx": 729.3514404296875,
+    "fy": 729.3514404296875,
+    "cx": 713.6680908203125,
+    "cy": 708.6710205078125
+  },
+  "rotated": true,
+  "device_name": "Aria Gen 1",
+  "camera_name": "rgb"
+}

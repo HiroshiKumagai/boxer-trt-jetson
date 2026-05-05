@@ -3,7 +3,7 @@
 Run Boxer inference using ONNX Runtime.
 
 Usage:
-    python /workspace/python/run_boxer_onnx.py --input sample_data/hohen_gen1 --track
+    python /workspace/python/run_boxer_onnx.py --input input
 
 Accepts all the same arguments as run_boxer.py.
 OWLv2, DinoV3, and BoxerNetCore are replaced with ONNX Runtime sessions via monkey-patching.
@@ -167,9 +167,10 @@ class OwlWrapperONNX:
                 "Please run onnx_export.py --owl first."
             )
 
-        # OWLv2 の Conv ノードは TensorrtExecutionProvider 非対応のため CUDA のみ使用
-        # CUDA Graph を試したが OWLv2 は CPU fallback ノード (Memcpy x10) が残るため不可。
-        # 構造的ブロッカーで回避不能 — IOBinding + persistent buffer のみ適用。
+        # CUDA only: TensorrtExecutionProvider has no kernel for OWLv2's Conv.
+        # CUDA Graph was attempted but OWLv2 retains 10 CPU-fallback Memcpy
+        # nodes that disqualify graph capture. Structural blocker; we only
+        # apply IOBinding + persistent buffers here.
         providers = (
             [("CUDAExecutionProvider", _cuda_ep_opts())]
             if device == "cuda"
@@ -479,11 +480,11 @@ class BoxerNetONNX:
         # DinoV3: TensorrtExecutionProvider (fixed shape 1×3×960×960, cache reused across runs)
         # Set trt_fp16_enable=True for ~14% faster inference at ~7% fewer 3D detections.
         # Set trt_fp16_enable=False (or remove the key) for full FP32 accuracy.
-        # trt_max_workspace_size: TRT ビルド時のワークスペース上限 (デフォルト ~4 GB → 1 GB に制限)
-        # 推論速度には影響せず、ピーク RAM を抑制する
+        # trt_max_workspace_size: TRT build-time workspace cap (default ~4 GB → 1 GB).
+        # No inference-speed impact, helps RAM peak.
         trt_cache = os.environ.get('ORT_TENSORRT_CACHE_PATH', '/workspace/trt_cache')
-        # BOXER_DINO_FP16=1 enables FP16 TRT engine for Dino (-2〜3 GB RAM, ~14% faster,
-        # but past measurement showed -7% 3D detections as accuracy cost).
+        # BOXER_DINO_FP16=1 enables FP16 TRT engine for Dino (-2 to -3 GB RAM,
+        # ~14% faster, but historical measurement showed -7% 3D detections).
         _dino_fp16 = os.environ.get("BOXER_DINO_FP16") == "1"
         dino_trt_providers = (
             [('TensorrtExecutionProvider', {

@@ -1,78 +1,32 @@
-# =============================================================================
-# Stage 1: projectaria_tools ビルドステージ
-#   - 全ビルド依存をインストールし wheel をビルド
-#   - Ocean の aarch64 NEON コンパイルエラーを CMAKE_ARGS で回避
-# =============================================================================
-FROM dustynv/pytorch:2.7-r36.4.0 AS builder
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        cmake build-essential ninja-build git \
-        libpng-dev libjpeg-dev libturbojpeg0-dev \
-        libboost-all-dev \
-        liblz4-dev libzstd-dev \
-        libopus-dev libfmt-dev libxxhash-dev \
-        rapidjson-dev \
-        libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python3 -m pip install --no-cache-dir pybind11 wheel --index-url https://pypi.org/simple
-
-# Ocean の NEON intrinsics (CVUtilities.cpp, FrameConverter.h) が gcc-11 で
-# signed/unsigned vector 型変換エラーになる。
-# コンパイラ推奨の -flax-vector-conversions を CXXFLAGS 経由で渡す
-# (scikit-build は CXXFLAGS env を cmake に明示的に転送する)。
-RUN git clone --depth 1 https://github.com/facebookresearch/projectaria_tools.git /tmp/pat && \
-    cd /tmp/pat && \
-    CXXFLAGS="-march=armv8-a+simd -flax-vector-conversions" \
-    CFLAGS="-march=armv8-a+simd" \
-    python3 -m pip wheel --no-deps --no-cache-dir -w /tmp/wheels . \
-        --index-url https://pypi.org/simple && \
-    rm -rf /tmp/pat
-
-# =============================================================================
-# Stage 2: 推論ランタイム
-#   - ビルドツール不要。Stage 1 でビルドした wheel のみコピー
-# =============================================================================
+# Inference runtime container (aarch64 / Jetson)
+# Base includes: PyTorch 2.7, TensorRT 10.3, CUDA 12.x (JetPack 6.x / L4T R36.4.0)
+# Responsibility: run python/run_boxer_onnx.py on the simple-format dataset
+# in input/.
 FROM dustynv/pytorch:2.7-r36.4.0
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# ランタイム依存のみ (共有ライブラリ)
+# Headless OpenCV runtime only.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1 \
-        libgl1-mesa-glx libgles2-mesa \
-        libturbojpeg \
-        libboost-iostreams1.74.0 libboost-filesystem1.74.0 \
-        libfmt8 \
-        libopus0 libxxhash0 \
-        libavcodec58 libavformat58 libavutil56 libswscale5 \
+        libgl1 libglib2.0-0 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Python deps:
+#   numpy<2          — PyTorch 2.7 ABI; the base image ships NumPy 2.x.
+#   opencv-python    — Boxer codebase imports cv2.
+#   tqdm             — Boxer run_boxer.py progress bar.
+#   onnxruntime-gpu  — Jetson-specific build with CUDAExecutionProvider +
+#                      TensorrtExecutionProvider. The PyPI onnxruntime is
+#                      CPU-only and reports CUDAExecutionProvider as
+#                      unavailable on Jetson.
 RUN python3 -m pip install --upgrade pip --index-url https://pypi.org/simple && \
     python3 -m pip install --no-cache-dir \
-        opencv-python tqdm dill \
+        "numpy<2" opencv-python tqdm \
         --index-url https://pypi.org/simple && \
-    # Jetson 向け GPU 版 onnxruntime (CUDAExecutionProvider 有効)
-    # CPU 版 (pypi.org/onnxruntime) は CUDAExecutionProvider を持たないため使用不可
     python3 -m pip install --no-cache-dir \
         onnxruntime-gpu==1.22.0 \
         --index-url https://pypi.jetson-ai-lab.io/jp6/cu128/
-
-# Stage 1 でビルドした projectaria_tools wheel をインストール
-# (rerun-sdk 等の依存が numpy 2.x を引き込む可能性があるため先にインストール)
-COPY --from=builder /tmp/wheels /tmp/wheels
-RUN python3 -m pip install --no-cache-dir /tmp/wheels/projectaria_tools*.whl \
-        --index-url https://pypi.org/simple && \
-    rm -rf /tmp/wheels
-
-# numpy<2 を最後に強制 (PyTorch は numpy 1.x でコンパイル済みのため)
-# 全依存インストール後に上書きすることで 2.x への再アップグレードを防ぐ
-RUN python3 -m pip install --no-cache-dir --force-reinstall \
-        "numpy<2" \
-        --index-url https://pypi.org/simple
 
 WORKDIR /workspace/boxer
 CMD ["/bin/bash"]

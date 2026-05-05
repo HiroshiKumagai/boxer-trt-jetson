@@ -4,13 +4,11 @@ Run [Boxer](https://github.com/facebookresearch/boxer) 3D object detection on NV
 
 Boxer detects and tracks 3D bounding boxes from a single RGB camera using OWLv2 (2D detection), DinoV3 (feature extraction), and BoxerNetCore (3D estimation). This repository provides tooling to export all three models to ONNX and run them on Jetson with the DinoV3 stage accelerated by TensorRT through ONNX Runtime's `TensorrtExecutionProvider`.
 
-> **Note:** JetPack 5.x (R35) is not supported. JetPack 6.x (R36) only.
-
 ---
 
 ## Benchmark results
 
-Measured on Jetson Orin NX with the `hohen_gen1` sequence (499 frames, `--track`).
+Measured on Jetson Orin NX with a 499-frame Aria RGB sequence.
 
 | Backend | Total | Per frame | OWLv2 | BoxerNet | GPU avg | RAM peak |
 |---------|-------|-----------|-------|----------|---------|----------|
@@ -26,9 +24,11 @@ FP16 produces ~7% fewer 3D detections per frame than FP32 due to reduced precisi
 
 ### Requirements
 
-- NVIDIA Jetson with JetPack 6.x (L4T R36.x, TensorRT 10.3)
-- Docker with NVIDIA Container Toolkit
-- ~50 GB free disk space (Docker images + model weights)
+- NVIDIA Jetson with JetPack 6.x (L4T R36.x, TensorRT 10.3). JetPack 5.x (R35) is not supported.
+- Docker with NVIDIA Container Toolkit.
+- ~50 GB free disk space (Docker images + model weights).
+
+Validated on: **Jetson AGX Orin Developer Kit** (32 GB unified memory), **L4T R36.4.7** (JetPack 6.2.x).
 
 ### 1. Clone this repository and Boxer
 
@@ -46,25 +46,17 @@ bash scripts/download_ckpts.sh
 cd ..
 ```
 
-### 3. Download sample data (optional)
+### 3. Build Docker images
 
 ```bash
-bash boxer/scripts/download_aria_data.sh hohen_gen1
-mkdir -p sample_data
-mv hohen_gen1 sample_data/
-```
-
-### 4. Build Docker images
-
-```bash
-# ONNX export + TRT engine builder
+# ONNX export image
 docker build -f docker/Dockerfile.convert.jetson -t boxer-convert-jetson .
 
-# Inference runtime (builds projectaria_tools from source, ~25 min)
+# Inference runtime
 docker build -f docker/Dockerfile.infer.jetson -t boxer-infer-jetson .
 ```
 
-### 5. Export models to ONNX
+### 4. Export models to ONNX
 
 ```bash
 bash export_onnx.sh            # all models
@@ -73,66 +65,71 @@ bash export_onnx.sh --dino     # DinoV3 only (also runs fix_dinov3_onnx.py)
 bash export_onnx.sh --boxernet # BoxerNetCore only
 ```
 
-Output in `onnx_weights/`: `owlv2_vision_detector.onnx`, `owlv2_meta.pt`, `dinov3.onnx`, `boxernet_core.onnx`
+Output in `onnx_weights/`: `owlv2_vision_detector.onnx`, `owlv2_meta.pt`, `dinov3.onnx`, `boxernet_core.onnx`.
 
-### 6. Run inference
+### 5. Run inference
+
+The repository ships with a 10-frame sample dataset under `input/`, so you can run inference immediately:
 
 ```bash
-# ONNX Runtime (DinoV3 accelerated via TensorRT, OWLv2 + Core on CUDA)
-bash run_onnx.sh --input sample_data/hohen_gen1 --track
+bash run_onnx.sh --input input
 ```
 
 On first run, ORT compiles and caches the DinoV3 TRT engine under `trt_cache/`. Subsequent runs reuse the cache.
 
-### 7. Benchmark with GPU monitoring
+Outputs are written under `output/`:
+
+| File | Contents |
+|---|---|
+| `boxer_3dbbs.csv` | Per-frame 3D detections in world coordinates. |
+| `boxer_3dbbs_tracked.csv` | 3D OBBs after tracker association across frames. |
+| `owl_2dbbs.csv` | Per-frame 2D detections from OWLv2. |
+| `boxer_viz/boxer_viz_NNNNN.jpg` | 3-panel visualization per frame: 2D detections / 3D detections / 3D tracks. |
+
+### 6. (Optional) Benchmark with GPU monitoring
 
 ```bash
-bash benchmark.sh onnx --input sample_data/hohen_gen1 --track
+bash benchmark.sh --input input
 ```
 
-Reports total wall-clock time, GPU utilization (from `tegrastats`), and RAM peak.
+Wraps `run_onnx.sh` with `tegrastats` and reports total wall-clock time, GPU utilization, and RAM peak.
 
 ### Optional — DinoV3 FP16
 
 Edit [python/run_boxer_onnx.py](python/run_boxer_onnx.py) and set `trt_fp16_enable: True`. FP16 is ~14% faster than FP32 but reduces 3D detection count by ~7%.
 
+### Optional — RAM-constrained tuning
+
+The default configuration prioritizes throughput. To stay under ~17 GB peak RAM at the cost of ~5% throughput, set these env vars:
+
+```bash
+BOXER_DISABLE_PERSISTENT_BUF=1 \
+BOXER_CUDA_MEM_LIMIT_GB=4 \
+BOXER_TRT_WORKSPACE_MB=256 \
+BOXER_CORE_ARENA_STRICT=1 \
+  bash benchmark.sh --input input
+```
+
+| env var | Effect |
+|---|---|
+| `BOXER_DISABLE_PERSISTENT_BUF=1` | Disable OWL persistent output buffers (saves ~10 GB RAM at the cost of one extra sync point per frame). |
+| `BOXER_CUDA_MEM_LIMIT_GB=4` | Cap each ORT CUDA EP's allocator at 4 GB. |
+| `BOXER_TRT_WORKSPACE_MB=256` | Cap the DinoV3 TRT engine's build-time workspace at 256 MB. No inference-time impact. |
+| `BOXER_CORE_ARENA_STRICT=1` | Force `kSameAsRequested` arena extension on the Core CUDA EP. |
+| `BOXER_VIZ_ASYNC=1` | Run `imencode` + per-frame JPG write on a background thread. |
+
 ---
 
 ## Design decisions
 
-### Why not custom TRT engines?
+### Why ORT `TensorrtExecutionProvider` instead of standalone TRT engines?
 
-Three TRT engines were built from the exported ONNX files, but all three had problems that made them unsuitable for use:
+DinoV3 is the only stage that benefits from TRT. OWLv2 and BoxerNetCore both have blockers for standalone TRT:
 
-**OWLv2 — FP16 produces NaN:**
-OWLv2 is CLIP-based and contains a learned `logit_scale` parameter applied as `exp(logit_scale)`. This value exceeds the FP16 range (±65504) and produces NaN in all logits, resulting in zero detections.
+- **OWLv2** — depthwise patch-embedding Conv has no TRT kernel on Jetson (`Could not find any implementation for node /embeddings/patch_embedding/Conv`). FP16 also overflows OWLv2's `exp(logit_scale)` and emits NaN logits.
+- **BoxerNetCore** — `bb2d_norm` has dynamic shape `(1, M, 4)` where M changes every frame; TRT recompiles per unique M (~27 s each), stalling the pipeline.
 
-**OWLv2 — TRT cannot compile at all:**
-`TensorrtExecutionProvider` rejects the OWLv2 ONNX with:
-```
-Could not find any implementation for node /embeddings/patch_embedding/Conv.
-```
-The depthwise Conv configuration used in the OWLv2 patch embedding has no TRT kernel for this combination of parameters on Jetson.
-
-**BoxerNetCore — Dynamic M dimension causes per-frame recompilation:**
-The input `bb2d_norm` has shape `(1, M, 4)` where M is the number of 2D detections and changes every frame. TRT builds a separate engine for each unique M value. Each build takes ~27 seconds, making the first occurrence of any new M value stall the pipeline. Unusable in practice.
-
-**DinoV3 custom FP32 engine — Feature values diverge:**
-The engine builds and runs without error, but the output features have large numerical differences from ONNX Runtime (max abs diff 4.88 on a random input vs 0.02 for the ORT TRT provider). This causes 3D detections to drop to near zero. The likely cause is that `fix_dinov3_onnx.py` inlines the rope_embed `If` nodes by hand — the resulting graph structure is optimized differently by TRT's kernel selector compared to the original graph.
-
-**Solution — Use ORT `TensorrtExecutionProvider` for DinoV3 only:**
-ONNX Runtime's `TensorrtExecutionProvider` compiles DinoV3 correctly: it automatically partitions the graph into TRT-compatible subgraphs and falls back to CUDA for unsupported nodes. Output values match the CUDA-only baseline. OWLv2 and BoxerNetCore remain on `CUDAExecutionProvider` to avoid the issues above.
-
-The custom TRT build scripts (`build_engine.sh`, `run_trt.sh`) are retained for reference.
-
-### Why a multi-stage Docker build for inference?
-
-`projectaria_tools` is required for reading Aria VRS files (`hohen_gen1` and other Aria sequences). It has no pre-built aarch64 wheel on PyPI and must be compiled from source, including the Ocean C++ library (~25 minutes, ~3 GB of build artifacts).
-
-A multi-stage build keeps the build toolchain out of the final runtime image:
-
-- **Stage 1 (builder):** installs cmake, ninja, boost, ffmpeg dev headers, and all other build dependencies; compiles `projectaria_tools` from source with `-flax-vector-conversions` to work around a gcc-11 NEON signed/unsigned vector type error in `FrameConverter.h`; produces a Python wheel.
-- **Stage 2 (runtime):** copies only the compiled wheel, installs runtime shared libraries (`libboost-filesystem`, `libfmt8`, `ffmpeg`, etc.), and discards all build tooling.
+ORT's `TensorrtExecutionProvider` partitions DinoV3 into TRT-compatible subgraphs and falls back to CUDA for unsupported nodes. OWLv2 and BoxerNetCore stay on `CUDAExecutionProvider`.
 
 ### Why `onnxruntime-gpu` from `pypi.jetson-ai-lab.io`?
 
@@ -146,11 +143,102 @@ This wheel enables both `CUDAExecutionProvider` and `TensorrtExecutionProvider`.
 
 ### Why `numpy<2`?
 
-PyTorch 2.7 in `dustynv/pytorch:2.7-r36.4.0` was compiled against NumPy 1.x. NumPy 2.x is binary-incompatible and causes `RuntimeError: Numpy is not available` when importing PyTorch. The base image ships NumPy 2.x, and some dependencies (`rerun-sdk`, used by `projectaria_tools`) re-upgrade to 2.x. Installing `numpy<2` last with `--force-reinstall` pins it correctly.
+PyTorch 2.7 in `dustynv/pytorch:2.7-r36.4.0` was compiled against NumPy 1.x. NumPy 2.x is binary-incompatible and causes `RuntimeError: Numpy is not available` when importing PyTorch. The base image ships NumPy 2.x, so `numpy<2` is pinned explicitly in both Docker images.
 
 ### Why DinoV3 ONNX has no height/width dynamic axes?
 
 The initial export used `{0:"batch", 2:"height", 3:"width"}` dynamic axes for DinoV3. This caused the ONNX exporter to produce symbolic-shape-dependent `If` nodes for the rope position embedding, where each branch has a different output shape. TRT cannot parse `If` nodes with mismatched branch output shapes. Removing height and width dynamic axes eliminates this problem. The `fix_dinov3_onnx.py` script additionally inlines any remaining `If` nodes as a safety measure.
+
+---
+
+## Simple dataset format
+
+A minimal per-frame format. Any directory containing a `meta.json` is auto-detected by `run_boxer.py` as simple format.
+
+### Directory layout
+
+```
+<data_dir>/
+  meta.json
+  frames/
+    00000_image.jpg            # or .png
+    00000_points.npy           # (N, 3) float32 semi-dense world-coord points
+    00000_pose.json            # T_world_camera (4x4)
+    00001_image.jpg
+    00001_points.npy
+    00001_pose.json
+    ...
+```
+
+Frame filename prefixes (`00000`, `00001`, …) are loaded in sorted order. A zero-padded 5-digit numeric tag is recommended but any alphanumeric string works (used verbatim as the frame tag).
+
+### `meta.json`
+
+Camera intrinsics shared across the sequence.
+
+```json
+{
+  "camera": {
+    "width": 1408,
+    "height": 1408,
+    "type": "pinhole",
+    "fx": 750.0,
+    "fy": 750.0,
+    "cx": 704.0,
+    "cy": 704.0
+  },
+  "rotated": true,
+  "device_name": "my_robot",
+  "camera_name": "rgb"
+}
+```
+
+| Key | Required | Description |
+|---|---|---|
+| `camera.width`, `camera.height` | ✅ | Image size (px). |
+| `camera.type` | ✅ | Currently only `"pinhole"` is supported. |
+| `camera.fx`, `camera.fy`, `camera.cx`, `camera.cy` | ✅ | Pinhole intrinsics. |
+| `rotated` | ❌ (default `false`) | Set to `true` when stored images are 90° rotated from human-upright. See caveat below. |
+| `device_name` | ❌ | Free-form label shown in visualizations. |
+| `camera_name` | ❌ | Free-form label shown in visualizations. |
+
+### `NNNNN_image.(jpg|png)`
+
+RGB image. Store in whatever orientation matches the `rotated` flag in `meta.json`. The loader does no re-rotation; the flag is forwarded to BoxerNet, which performs its own internal rotation handling.
+
+### `NNNNN_points.npy`
+
+`(N, 3)` `float32` NumPy array of **3D points in world coordinates**.
+
+- N is per-frame and may vary. Aria typically yields a few thousand points; CA-1M-style depth-map subsampling can produce ~100k.
+- Source is unconstrained: depth-map unprojection, LiDAR scans, SLAM semi-dense reconstructions, etc.
+- Do **not** include NaNs — `sdp_to_patches` median computation will misbehave.
+
+### `NNNNN_pose.json`
+
+Camera pose in world coordinates as a 4×4 matrix.
+
+```json
+{
+  "T_world_camera": [
+    [r11, r12, r13, tx],
+    [r21, r22, r23, ty],
+    [r31, r32, r33, tz],
+    [0.0, 0.0, 0.0,  1.0]
+  ],
+  "time_ns": 1700000000000000000
+}
+```
+
+- Convention: maps a point from camera frame to world frame (`p_world = T_world_camera @ p_camera`).
+- `time_ns` is optional. Resolution priority:
+  1. `pose.json["time_ns"]` if present.
+  2. `int(NNNNN)` if it parses as ≥ 1e12 ns.
+  3. Otherwise `index × 1e8` (= 10 FPS pseudo-timestamps).
+
+### Caveat — camera orientation
+
+The shipped sample uses `rotated: true` because it was sourced from an Aria sequence where images are stored 90° rotated from human-upright. BoxerNet's [`gravity_align_T_world_cam`](boxer/utils/gravity.py) was trained with this convention (camera's X axis aligns with gravity).
 
 ---
 
@@ -159,18 +247,15 @@ The initial export used `{0:"batch", 2:"height", 3:"width"}` dynamic axes for Di
 ```
 .
 ├── docker/
-│   ├── Dockerfile.convert.jetson   # ONNX export + TRT engine builder
+│   ├── Dockerfile.convert.jetson   # ONNX export
 │   └── Dockerfile.infer.jetson     # Multi-stage inference runtime
 ├── python/
 │   ├── onnx_export.py              # Export OWLv2, DinoV3, BoxerNetCore to ONNX
 │   ├── fix_dinov3_onnx.py          # Inline rope_embed If nodes for TRT compatibility
-│   ├── build_engines.py            # Build custom TRT engines (reference only)
-│   ├── run_boxer_onnx.py           # ONNX Runtime inference (monkey-patches run_boxer.py)
-│   └── run_boxer_trt.py            # Custom TRT inference (reference only)
+│   └── run_boxer_onnx.py           # ONNX Runtime inference (monkey-patches run_boxer.py)
+├── input/                          # Sample dataset in simple format (10 frames)
 ├── export_onnx.sh                  # Export + auto-fix DinoV3
-├── build_engine.sh                 # Build custom TRT engines (reference only)
 ├── run_onnx.sh                     # Run ONNX Runtime inference
-├── run_trt.sh                      # Run custom TRT inference (reference only)
 └── benchmark.sh                    # Run inference with tegrastats GPU monitoring
 ```
 

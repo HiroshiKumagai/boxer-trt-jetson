@@ -28,7 +28,7 @@ DEFAULT_CKPT = "/workspace/boxer/ckpts/boxernet_hw960in4x6d768-wssxpf9p.ckpt"
 # OWLv2 VisionDetector
 # ---------------------------------------------------------------------------
 
-def export_owlv2(device, onnx_dir, text_prompts=None):
+def export_owlv2(onnx_dir, text_prompts=None):
     import io
     from owl.owl_wrapper import VisionDetectorWrapper, _CKPT_PATH
     from owl.clip_tokenizer import CLIPTokenizer
@@ -112,7 +112,7 @@ def export_owlv2(device, onnx_dir, text_prompts=None):
 # DinoV3
 # ---------------------------------------------------------------------------
 
-def export_dinov3(device, onnx_dir, hw=960):
+def export_dinov3(onnx_dir, hw=960):
     from boxernet.dinov3_wrapper import DinoV3Wrapper
 
     print("==> Exporting DinoV3 to ONNX...")
@@ -131,8 +131,9 @@ def export_dinov3(device, onnx_dir, hw=960):
             onnx_path,
             input_names=["img"],
             output_names=["features"],
-            # height/width は常に 960x960 固定。動的にすると symbolic shape が
-            # rope_embed 内の If ノードを生成し TensorRT がパースできないため固定する。
+            # height/width must stay fixed at 960x960. Marking them dynamic
+            # produces symbolic-shape If nodes inside rope_embed that TensorRT
+            # cannot parse (the branches have mismatched output shapes).
             dynamic_axes={
                 "img": {0: "batch"},
                 "features": {0: "batch"},
@@ -179,7 +180,7 @@ class _BoxerNetCoreONNX(torch.nn.Module):
         return query
 
 
-def export_boxernet_core(device, onnx_dir, ckpt_path):
+def export_boxernet_core(onnx_dir, ckpt_path):
     from boxernet.boxernet import BoxerNet
 
     print("==> Exporting BoxerNetCore to ONNX...")
@@ -259,7 +260,6 @@ def main():
     parser = argparse.ArgumentParser(description="Export Boxer models to ONNX")
     parser.add_argument("--ckpt", default=DEFAULT_CKPT, help="BoxerNet checkpoint path")
     parser.add_argument("--onnx_dir", default=ONNX_DIR, help="Output directory for ONNX files")
-    parser.add_argument("--device", default="cpu", help="Device for export (cpu recommended)")
     parser.add_argument("--all", action="store_true", help="Export all models")
     parser.add_argument("--owl", action="store_true", help="Export OWLv2")
     parser.add_argument("--dino", action="store_true", help="Export DinoV3")
@@ -279,19 +279,19 @@ def main():
     exported = []
 
     if args.owl:
-        path = export_owlv2(args.device, args.onnx_dir)
+        path = export_owlv2(args.onnx_dir)
         if args.simplify:
             simplify_onnx(path)
         exported.append(path)
 
     if args.dino:
-        path = export_dinov3(args.device, args.onnx_dir)
+        path = export_dinov3(args.onnx_dir)
         if args.simplify:
             simplify_onnx(path)
         exported.append(path)
 
     if args.boxernet:
-        path = export_boxernet_core(args.device, args.onnx_dir, args.ckpt)
+        path = export_boxernet_core(args.onnx_dir, args.ckpt)
         if args.simplify:
             simplify_onnx(path)
         exported.append(path)
